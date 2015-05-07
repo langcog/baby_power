@@ -1,0 +1,292 @@
+---
+output: html_document
+---
+
+Prelims.
+
+```{r}
+source("~/Projects/R/Ranalysis/useful_dplyr.R")
+
+ci95.t <- function(x) {
+  qt(.975, length(x)-1) * sem(x)
+} 
+```
+
+Plotting recommendations
+------------------------
+
+```{r}
+data <- data.frame(condition = c(rep("Experimental", 16),
+                     rep("Control", 16)), 
+                   looking.time = c(rnorm(16, mean = 15, sd = 5),
+                                    rnorm(16, mean = 12.5, sd = 5)))
+
+ms <- data %>%
+  group_by(condition) %>%
+  summarise(mean = mean(looking.time), 
+            ci = ci95.t(looking.time), 
+            sem = sem(looking.time)) 
+```
+
+Standard bar plot
+
+```{r}
+pos <- position_dodge()
+
+pdf("plots/bars.pdf", width = 5, height=5)
+qplot(condition, mean, fill = condition, 
+      colour = condition,
+      position = pos,
+      stat = "identity", 
+      geom="bar", 
+      data = ms) + 
+  geom_linerange(data = ms, 
+                 aes(x = condition, y = mean, 
+                     fill = condition, 
+                     ymin = mean - sem, 
+                     ymax = mean + sem), 
+                 position = pos,                     
+                 colour = "black") + 
+  xlab("Group") +
+  ylab("Looking Time") + 
+  ylim(c(0, 25))
+dev.off()
+```
+
+Scatter plot
+
+```{r}
+pdf("plots/scatter.pdf", width = 5, height=5)
+
+qplot(condition, looking.time, fill = condition, 
+        colour = condition, 
+        group = condition, 
+        position = position_jitterdodge(jitter.width = .2), 
+        geom="point", 
+        data = data) + 
+  geom_linerange(data = ms, 
+                     aes(x = condition, y = mean, 
+                         fill = condition, 
+                         ymin = mean - ci, 
+                         ymax = mean + ci), 
+                     position = position_dodge(), 
+                     size = 1, 
+                     colour = "black") + 
+  xlab("Group") +
+  ylab("Looking Time") + 
+  ylim(c(0, 25))
+dev.off()
+```
+
+
+Power analysis
+--------------
+
+Negative controls.
+
+```{r}
+n.sims <- 100
+ns <- seq(5,100,5)
+ds <- seq(.2,1.2,.2)
+
+ms <- expand.grid(n = ns, d = ds) %>%
+  group_by(n, d) %>%
+  do(data.frame(single = pwr.p.test(n = .$n, 
+                         h = .$d, 
+                         sig.level = .05)$power,
+                control = pwr.2p.test(n = .$n, 
+                                 h = .$d, 
+                         sig.level = .05)$power)) %>%
+  gather(Condition, p.val, single, control) %>%
+  mutate(Condition = factor(Condition, 
+                            levels = c("single","control"), 
+                            labels = c("Single expt",
+                                       "Expt + neg cntl")))
+
+pdf("plots/power_gap.pdf", width = 10, height = 5)
+qplot(n, p.val, col = Condition, 
+      facets = ~ d,
+      geom = c("point","line"),
+      data = ms) + 
+  xlab("Number of participants") +
+  ylab("Power") + 
+  xlim(c(0,100))
+dev.off()
+```
+
+Mediation/splits
+
+```{r}
+n.sims <- 100
+ns <- seq(5,100,5)
+ds <- seq(.2,1.2,.2)
+
+ms <- expand.grid(n = ns, d = ds) %>%
+  group_by(n, d) %>%
+  do(data.frame(single = pwr.p.test(n = .$n, 
+                         h = .$d, 
+                         sig.level = .05)$power,
+                control = pwr.2p.test(n = .$n/2, 
+                                 h = .$d, 
+                         sig.level = .05)$power)) %>%
+  gather(Condition, p.val, single, control) %>%
+  mutate(Condition = factor(Condition, 
+                            levels = c("single","control"), 
+                            labels = c("Single expt",
+                                       "Gender split")))
+
+pdf("plots/post_hoc.pdf", width = 10, height = 5)
+qplot(n, p.val, col = Condition, 
+      facets = ~ d,
+      geom = c("point","line"),
+      data = ms) + 
+  xlab("Number of participants") +
+  ylab("Power") + 
+  xlim(c(0,100))
+dev.off()
+```
+
+Single moderator sniffing sim.
+
+```{r}
+n.samps <- 10000
+n.obs <- 20
+
+d <- data.frame()
+for (i in 1:n.samps) {
+  x <- rnorm(n.obs)
+  
+  d <- rbind(d, 
+        data.frame(p = t.test(x)$p.value,
+                   p.mod = t.test(x[1:(n.obs/2)],
+                                  x[(n.obs/2 + 1):n.obs])$p.value))
+}
+```
+
+plot. 
+
+```{r}
+ms <- d %>%
+  summarise(fp = mean(p < .05), 
+            fp.mod = mean(p.mod < .05), 
+            fp.mod.if.true = mean(p.mod[p > .05] < .05), 
+            fp.mod.if.null = mean(p.mod[p < .05] < .05)) %>%
+  gather(condition, false.positive, fp, fp.mod, fp.mod.if.true, fp.mod.if.null)
+
+qplot(condition, false.positive, geom="bar", stat="identity", data=ms) + 
+  geom_hline(yintercept=.05, lty=2, col = "red")
+
+```
+
+Frank et al. (2009) analysis
+----------------------------
+
+```{r}
+d <- read.csv("~/Projects/R/infant_power/VMM_data.csv")
+
+d[d$condition == "BIMODAL" | 
+    d$condition == "VISUAL",
+  c("nov","fam")] <- d[d$condition == "BIMODAL" | 
+                         d$condition == "VISUAL",
+                       c("nov","fam")]/1000
+
+
+df <- d %>% 
+  filter(!is.na(nov), !is.na(fam)) %>%
+  select(subnum, condition, nov, fam) 
+
+d.long <- df %>%
+  gather(measure, looking.time, nov, fam) 
+
+ms <- d.long %>%
+  group_by(condition, measure) %>%
+  summarise(m = mean(looking.time, na.rm=TRUE), 
+            sd = sd(looking.time, na.rm=TRUE), 
+            n = length(looking.time), 
+            cih = ci.high(looking.time), 
+            cil = ci.low(looking.time))   
+
+qplot(condition, m, ymin = m - cil, ymax = m + cih, 
+      fill=measure, stat="identity",
+      position = position_dodge(width=.9), 
+      geom = c("bar","linerange"), data=ms)
+```
+
+distributional form 
+
+```{r}
+qplot(looking.time, data = d.long)
+```
+
+```{r}
+xs <- seq(0,40,.1)
+qplot(xs, dweibull(xs, shape = 2, scale = 8), geom="line")
+```
+
+sims using these values. 
+
+```{r}
+d <- data.frame()
+for (i in 1:n.sims) {
+  c1 <- rnorm(16, mean = 13.6, sd = 6.6)
+  c2 <- rnorm(16, mean = 8.8, sd = 5.2)
+  d <- rbind(d, 
+             data.frame(c1 = mean(c1), 
+                        c2 = mean(c2), 
+                        p = t.test(c1,c2)$p.value))
+}
+
+
+```
+
+```{r}
+
+qplot(p, data=d, fill=p <.05)
+mean(d$p < .05)
+```
+```{r}
+df %>% 
+  group_by(condition) %>%
+  summarise(d = mean(nov - fam) / ((sd(nov) + sd(fam))/2))
+
+d.long %>%
+  group_by(condition, measure) %>%
+  summarise(mean = mean(looking.time), 
+            sd = sd(looking.time))
+```
+
+first stats:
+
+```{r}
+dt <- d.long %>%
+  filter(condition == "VISUAL" | condition == "BIMODAL")
+
+t.test(d.long$looking.time[d.long$condition == "BIMODAL" & 
+                             d.long$measure == "nov"],
+       d.long$looking.time[d.long$condition == "BIMODAL" & 
+                             d.long$measure == "fam"], 
+       paired = TRUE)
+
+t.test(d.long$looking.time[d.long$condition == "VISUAL" & 
+                             d.long$measure == "nov"],
+       d.long$looking.time[d.long$condition == "VISUAL" & 
+                             d.long$measure == "fam"], 
+       paired = TRUE)
+
+t.test(d.long$looking.time[d.long$condition == "BIMODAL" & 
+                             d.long$measure == "nov"] - 
+       d.long$looking.time[d.long$condition == "BIMODAL" & 
+                             d.long$measure == "fam"], 
+       d.long$looking.time[d.long$condition == "VISUAL" & 
+                             d.long$measure == "nov"] - 
+         d.long$looking.time[d.long$condition == "VISUAL" & 
+                             d.long$measure == "fam"], 
+       paired = FALSE)
+
+anova(lm(looking.time ~ condition * measure, data=dt))
+
+summary(aov(looking.time ~ condition * measure + Error(subnum/measure), data=dt))
+```
+
+
+
