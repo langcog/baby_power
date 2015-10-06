@@ -1,86 +1,159 @@
 ---
+title: "Problems of statistical power in infancy research"
+author: "Michael C. Frank"
+date: "Sept 28, 2015"
 output: html_document
+bibliography: babypower.bib
 ---
 
-Prelims.
+```{r, echo=FALSE, warn=FALSE, message=FALSE, sanitize=TRUE}
+# knitr settings to control how R chunks work.
+require(knitr)
+opts_chunk$set(
+  fig.width=7, fig.height=5,
+  message=FALSE,
+  sanitize=TRUE,
+  cache=TRUE,
+  warn=FALSE,
+  error=FALSE,
+  echo=FALSE,
+  size="small"    # slightly smaller font for code
+)
+```
 
 ```{r}
-source("~/Projects/R/Ranalysis/useful_dplyr.R")
+#runtime: shiny
+library(dplyr)
+library(ggplot2)
+library(RCurl)
+library(magrittr)
+library(langcog)
+library(shiny)
+library(pwr)
+library(tidyr)
+theme_set(theme_bw())
+```
 
+```{r}
 ci95.t <- function(x) {
   qt(.975, length(x)-1) * sem(x)
 } 
 ```
 
-Plotting recommendations
-------------------------
+# Abstract
+
+Reproducibility is a core value for empirical research, but there is increasing concern throughout psychology that weak statistical standards and methodological practices have led to low empirical rates of replication. Because research with infants is labor-intensive and slow, reproducibility rates have not been assessed directly. Yet the small sample sizes and limited numbers of measurements available in this work lead to significant concern about this field. I show here that much published infancy research is likely to be underpowered and that the conventional sample sizes are insufficient for detecting the majority of effects, especially when post-hoc analyses are employed. I describe a set of best practices for infancy research that may mitigate some of these issues, and present a simple tool for power analysis.
+
+# Introduction
+
+Replicability is a cornerstone of empirical science. If an experiment cannot be repeated, it cannot be built on by future work, and its theoretical value is limited at best. Yet empirical estimates of the reproducibility of psychology lead to the conclusion that our work forms less of a stable foundation than we would hope  [@collaboration2015]: in a sample of 100 replications of published articles in top journals, fewer than half were judged to have replicated. Correcting the methodological and cultural issues that have led to this situation is thus a critical goal for continuing work in our field. In the current article, my goal is to focus specifically on the infancy literature---and even more specifically on looking time studies---and to highlight a number of methodological practices that may lead to a particular inflation of false positives in this literature. 
+
+A wide variety of practices have been documented as leading to decreases in reproducibility (see e.g., @simonsohn2011 for discussion). Leaving aside so-called "questionable research practices" such as selective reporting of positive measures or positive studies, there are still many reasons to expect that the infancy literature would be especially vulnerable to issues of reproducibility:
+
++ Recruiting families to participate is expensive and time-consuming, leading to very little direct replication, either within an individual lab or between labs. 
++ For the same reason, sample sizes are routinely small in this literature (as I will show below), and so the maximal statisical power for any particular study is typically low.
++ Although a small number of demonstrations have made quantitative predictions about infant looking time [@teglas2011; @kidd2012], the vast majority of work using looking time relies only on statistical tests for difference; in many cases there are not even directional criteria. 
++ Post-hoc analyses, which are frequent in infancy work, lead to an inflation of false-positives due to the many analyses that are possible for a single dataset.
++ There are many legitimate reasons for exlcuding infants from a study, but  analytic flexibility in excluding infants can again lead to an inflation of false positives.
+
+The result is a literature whose replicability has not been assessed, in combination with the prevalence---at least anecdotally---of practices that are known to decrease replicability. 
+
+In this paper, while recognizing the challenges of infancy research, I attempt to provide guidance on how authors can deal with some of these issues, focusing specifically on the issue of statistical power [@cohen1992]. Statistical power is a critical and under-appreciated construct within the frequentist statistical paradigm (which, for better or worse, is still the working tool of the majority of psychologists). The power on a statistical test is the probability of rejecting the null hypothesis, given a particular sample, effect size, and $\alpha$ level (typically .05). The basics of statistical power are intuitive: smaller effects require larger samples to detect with high probability. Yet often power calculations are difficult because experimenters have no expectations about effect size. In addition, there are there are many consequences of simple power calculations that are not always intuitive. 
+
+Thus, I will try to situate the mechanics of power analysis within the infancy literature, whenever possible connecting these ideas to concrete experimental details. I begin by describing a small-scale systematic literature review that gives some intuition for the types of samples that are typically employed in infancy work. I then use simulation to explore the statistical power implied by these samples, and give an interactive web app that allows interested readers to explore these ideas further. I end by describing some recommendations for best practices in future infancy work. 
+
+# Systematic literature review
+
+The goal of this review was to explore a sample of infancy-focused experiments and measure their characteristics in terms of dependent variables, number of participants, typical statistical practices, and distribution of measured effects (in terms of both effect size and statistical significance). 
+
+## Methods
+
+We selected the 2014 volumes of the journals _Child Development_, _Developmental Science_, and _Infancy_. A coder examined each article and determined if it reported research with infants, which we defined (somewhat arbitrarily) as being children under 14 months. If it included infants, we made a determination as to whether the article included experimental studies (defined as those studies which included an experimental manipulation, either within- or between-subjects). 
+
+For those studies that met our criteria (experiments with infants), we coded the following features for each separate experiment:
+
++ number of groups, with age and $n$ for each group
++ type of statistical test
++ effect size (if this was possible to compute from the reported statistics)
+
+We also made a subjective determination whether it appeared that any post-hoc mediation analyses had been conducted (e.g., a split by gender or other demographic factors).
 
 ```{r}
-data <- data.frame(condition = c(rep("Experimental", 16),
-                     rep("Control", 16)), 
-                   looking.time = c(rnorm(16, mean = 15, sd = 5),
-                                    rnorm(16, mean = 12.5, sd = 5)))
+dataset_key <- "1mnrWdcW5Ui-Lm4VTA2selVy425PPMamC7hovDqFJO7E"
+dataset_url <- sprintf("https://docs.google.com/spreadsheets/d/%s/export?id=%s&format=csv",
+                       dataset_key, dataset_key)
+  
+d.raw <- read.csv(textConnection(getURL(dataset_url)), stringsAsFactors = FALSE) 
 
-ms <- data %>%
-  group_by(condition) %>%
-  summarise(mean = mean(looking.time), 
-            ci = ci95.t(looking.time), 
-            sem = sem(looking.time)) 
+d <- d.raw %>% 
+  rowwise %>%
+  mutate(n = sum(c(n_1, n_2, n_3, n_4), na.rm=TRUE),
+         n.mean = mean(c(n_1,n_2, n_3, n_4), na.rm=TRUE), 
+         age = mean(c(mean_age_1,mean_age_2,
+                      mean_age_3,mean_age_4), na.rm=TRUE)) %>%
+  select(-X) %>%
+  mutate(type = ifelse(experiment == "yes", "experimental", "correlational")) 
 ```
+  
+A total of 
 
-Standard bar plot
 
 ```{r}
-pos <- position_dodge()
+ms <- d %>% 
+  group_by(type) %>% 
+  summarise(n = median(n.mean, na.rm=TRUE))
 
-pdf("plots/bars.pdf", width = 5, height=5)
-qplot(condition, mean, fill = condition, 
-      colour = condition,
-      position = pos,
-      stat = "identity", 
-      geom="bar", 
-      data = ms) + 
-  geom_linerange(data = ms, 
-                 aes(x = condition, y = mean, 
-                     fill = condition, 
-                     ymin = mean - sem, 
-                     ymax = mean + sem), 
-                 position = pos,                     
-                 colour = "black") + 
-  xlab("Group") +
-  ylab("Looking Time") + 
-  ylim(c(0, 25))
-dev.off()
+qplot(n, fill = type,
+      binwidth = .2,
+      data=d) +
+  scale_x_log10() + 
+  xlab("N per cell") + ylab("Number of studies") +
+  geom_vline(data=ms, aes(xintercept = n, col = type), lty=2) + 
+  scale_fill_solarized() + 
+  ggtitle("N for all studies (log scale)")
 ```
-
-Scatter plot
 
 ```{r}
-pdf("plots/scatter.pdf", width = 5, height=5)
-
-qplot(condition, looking.time, fill = condition, 
-        colour = condition, 
-        group = condition, 
-        position = position_jitterdodge(jitter.width = .2), 
-        geom="point", 
-        data = data) + 
-  geom_linerange(data = ms, 
-                     aes(x = condition, y = mean, 
-                         fill = condition, 
-                         ymin = mean - ci, 
-                         ymax = mean + ci), 
-                     position = position_dodge(), 
-                     size = 1, 
-                     colour = "black") + 
-  xlab("Group") +
-  ylab("Looking Time") + 
-  ylim(c(0, 25))
-dev.off()
+filter(d, type == "experimental") %>%
+  ggplot(aes(x = n.mean, fill = DV)) + 
+           geom_histogram(binwidth = 5) + 
+  xlim(c(0,50)) +
+  ggtitle("N for experimental studies using looking time") + 
+  scale_fill_solarized() + 
+  xlab("N per cell") + ylab("Number of studies")
 ```
 
+```{r}
+filter(d, type == "experimental") %>%
+  ggplot(aes(x = age, y = n.mean, col = DV)) +
+  geom_point() + 
+  scale_colour_solarized() + 
+  ggtitle("N for experimental studies") + 
+  ylab("N per cell") + xlab("Age (months)")
+```
 
-Power analysis
---------------
+P-curves
+
+```{r}
+ps <- d %>%
+  filter(p < .05) %>%
+  mutate(ps = cut(p, c(0,.01,.02,.03,.04,.05))) %>%
+  group_by(ps) %>%
+  summarise(n = n()) %>%
+  mutate(prop = n / sum(n))
+
+qplot(ps, prop, group = 1, geom = "line",
+      data = ps) + 
+  ylim(c(0,.6))
+```
+
+Figure: Number of participants
+
+# Statistical Power: Simulations
+
+Statistical power is the probability that a particular statistical test will reject the null hypothesis. 
+
+I show simulations here that demonstrate issues with negative control groups, the use of post-hoc mediator variables
 
 Negative controls.
 
@@ -178,6 +251,128 @@ qplot(condition, false.positive, geom="bar", stat="identity", data=ms) +
 
 ```
 
+## Basic power analysis
+
+The key question of course for basic power analysis is the effect size that you would like to detect. If effects are large, then small samples are more justified. If effects are smaller, then small samples inflate the risk of false positives
+
+## Negative control groups
+
+A common practice in infancy research is the addition of negative control experiments---that is, control groups that test an alternative explanation and for which the prediction is a failure. It is not unknown to see these control groups presented as distinct studies, with independent statistical tests performed. Then, a positive result in the primary experiment of interest and a failure to find a statistically significant result are used together to argue for the importance of the factor that was manipulated in the first experiment. 
+
+Of course, this experimental logic is not sound. These two experiments are in fact _different conditions_ of the _same experiment_, because there is a manipulation whose causal importance is being assessed by the contrast in effects between groups. And since these two conditions are being compared, the difference between them must be tested statistically. The alternative strategy of 
+[@gelman,@nrn-significnotsignif]
+
+Consider a researcher who runs a standard infancy study with N=16 or N=24 and then goes on to explore a gender effect within that dataset. Even if 
+
+Figure \ref{fig:gender} shows the results of a power analysis that assumes that the gender effect is equal in magnitude to the original effect (essentially, that one gender showed the predicted effect and the other showed zero effect). Even if the original effect was very well-powered, the power to detect the gender effect is very small. Consider a case with $d=.8$, a large effect, and $N=20$: the power on the original study is .95: more than sufficient. But the power to detect a gender effect is .43. 
+
+There are two reasons for this asymmetry. The first is that by considering a moderator of the effect like gender, the researcher is considering a between-subjects, rather than a with-subjects, measure. Such measures are always more variable. The second is that by considering this between-subjects measure, the researcher has reduced the effective sample size in each group to 8 infants. Considered this way, it's hardly surprising that the power to detect 
+
+Finally, as has been noted prominently before, the post-hoc, data-contingent exploration of mediator and moderator variables increases the false-positive rate, due to issues of multiple comparison  \cite{simonsohn2011}. Even if researchers report these as subsidiary analyses that do not compromise the main analysis, there is nevertheless a larger chance that such subsidiary analyses are false. 
+
+To illustrate this pattern, consider the 
+
+# Recommendations
+
+We close with a number of recommendations
+These are: 1) larger samples, 2) internal replications (especially including developmental replicates), 3) use of more transparent visualizations, 4) avoidance of post-hoc analysis, and 5) use of multi-trial paradigms.
+
+## Internal replications
+
+The strongest test of the reproducibility of a finding is a direct replication. Authors should be encouraged to perform and report such replications in their manuscripts, and reviewers should feel empowered to request them. Authors
+
+One 
+ 
+Developmental replicates
+
+## Larger samples
+
+As is evidence from the preceding discussion, sample sizes in 
+
+Power analysis can be a helpful guide
+
+In sum, the number of participants for a study will likely vary widely from study to study, but it will rarely be 16. 
+
+
+
+## Visualization
+
+
+```{r}
+data <- data.frame(condition = c(rep("Experimental", 16),
+                     rep("Control", 16)), 
+                   looking.time = c(rnorm(16, mean = 15, sd = 5),
+                                    rnorm(16, mean = 12.5, sd = 5)))
+
+ms <- data %>%
+  group_by(condition) %>%
+  summarise(mean = mean(looking.time), 
+            ci = ci95.t(looking.time), 
+            sem = sem(looking.time)) 
+```
+
+
+```{r}
+pos <- position_dodge()
+
+pdf("plots/bars.pdf", width = 5, height=5)
+qplot(condition, mean, fill = condition, 
+      colour = condition,
+      position = pos,
+      stat = "identity", 
+      geom="bar", 
+      data = ms) + 
+  geom_linerange(data = ms, 
+                 aes(x = condition, y = mean, 
+                     fill = condition, 
+                     ymin = mean - sem, 
+                     ymax = mean + sem), 
+                 position = pos,                     
+                 colour = "black") + 
+  xlab("Group") +
+  ylab("Looking Time") + 
+  ylim(c(0, 25))
+dev.off()
+```
+
+
+```{r}
+pdf("plots/scatter.pdf", width = 5, height=5)
+
+qplot(condition, looking.time, fill = condition, 
+        colour = condition, 
+        group = condition, 
+        position = position_jitterdodge(jitter.width = .2), 
+        geom="point", 
+        data = data) + 
+  geom_linerange(data = ms, 
+                     aes(x = condition, y = mean, 
+                         fill = condition, 
+                         ymin = mean - ci, 
+                         ymax = mean + ci), 
+                     position = position_dodge(), 
+                     size = 1, 
+                     colour = "black") + 
+  xlab("Group") +
+  ylab("Looking Time") + 
+  ylim(c(0, 25))
+dev.off()
+```
+
+
+The most conventional visualization used in infancy research is the standard "dynamite" bar plot, with error bars representing the standard error of the mean. While they are clear and easy to read, these plots are relatively uninformative from the perspective of revealing features of the underlying dataset, as has been noted extensively in other literatures [@plosbio]. Authors should strongly consider moving towards plotting the individual participants' 
+
+In addition, the use of the standard error of the mean (SEM) is potentially misleading as it does not provide a good guide for inference. First, researchers should move from SEM to 95% confidence intervals [@cumming2013]. Second, researchers are often taught that non-overlapping standard errors are a meaningful indicator of the outcome of a statistical test---this is in fact false [@cumming2006]. Such rules of thumb are doubly misleading when within-subject means are plotted side-by-side, since the appropriate statistical test is paired---hence SEM and CI are not inferentially relevant. 
+
+# Post-hoc analyses
+
+Although such analyses are interesting, they are inevitably underpowered 
+
+# Multi-trial paradigms
+
+
+
+
 Frank et al. (2009) analysis
 ----------------------------
 
@@ -203,16 +398,14 @@ ms <- d.long %>%
   summarise(m = mean(looking.time, na.rm=TRUE), 
             sd = sd(looking.time, na.rm=TRUE), 
             n = length(looking.time), 
-            cih = ci.high(looking.time), 
-            cil = ci.low(looking.time))   
+            ci95 = ci95.t(looking.time))   
 
-qplot(condition, m, ymin = m - cil, ymax = m + cih, 
+qplot(condition, m, ymin = m - ci95, ymax = m + ci95, 
       fill=measure, stat="identity",
       position = position_dodge(width=.9), 
       geom = c("bar","linerange"), data=ms)
 ```
 
-distributional form 
 
 ```{r}
 qplot(looking.time, data = d.long)
@@ -289,4 +482,4 @@ summary(aov(looking.time ~ condition * measure + Error(subnum/measure), data=dt)
 ```
 
 
-
+# References
